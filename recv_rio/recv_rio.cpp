@@ -56,26 +56,27 @@ int main()
         return 1;
     }
 
-    // Create event for completion
+    // Setup completion by Event
     auto notification_event = WSACreateEvent();
-    if(notification_event == WSA_INVALID_EVENT) {
+    if (notification_event == WSA_INVALID_EVENT) {
         std::cout << "WSACreateEvent Error: " << WSAGetLastError() << std::endl;
         return 1;
     }
 
-    // Setup completion queue
     RIO_NOTIFICATION_COMPLETION completion_spec {
         .Type = RIO_EVENT_COMPLETION,
-        .Event = {
-            .EventHandle = notification_event,
-            .NotifyReset = TRUE,
-        },
+        .Event =
+            {
+                .EventHandle = notification_event,
+                .NotifyReset = TRUE,
+            },
     };
 
-    constexpr DWORD max_outstanding_receive = 128;
+    // Setup completion queue
+    constexpr DWORD max_outstanding_requests = 128;
 
     auto completion_queue =
-        rio_extension_function_table.RIOCreateCompletionQueue(max_outstanding_receive, &completion_spec);
+        rio_extension_function_table.RIOCreateCompletionQueue(max_outstanding_requests, &completion_spec);
     if (completion_queue == RIO_INVALID_CQ) {
         std::cout << "RIOCreateCompletionQueue Error: " << WSAGetLastError() << std::endl;
         return 1;
@@ -83,7 +84,7 @@ int main()
 
     // Setup request queue
     auto request_queue = rio_extension_function_table.RIOCreateRequestQueue(
-        sockfd, max_outstanding_receive, 1, 0, 1, completion_queue, completion_queue, nullptr);
+        sockfd, max_outstanding_requests, 1, 0, 1, completion_queue, completion_queue, nullptr);
     if (request_queue == RIO_INVALID_RQ) {
         std::cout << "RIOCreateRequestQueue Error: " << WSAGetLastError() << std::endl;
         return 1;
@@ -107,24 +108,28 @@ int main()
     }
 
     // Setup descriptors
-    auto receive_descriptors = new RIO_BUF[max_outstanding_receive];
+    struct Descriptor {
+        RIO_BUF rio_buf;
+        char* buffer;
+    };
+    auto descriptors = new Descriptor[max_outstanding_requests];
 
-    for (size_t i = 0; i < max_outstanding_receive; i++) {
-        receive_descriptors[i].BufferId = buffer_id;
-        receive_descriptors[i].Length = max_receive_length;
-        receive_descriptors[i].Offset = i * max_receive_length; // offset realtive to start of buffer
+    for (size_t i = 0; i < max_outstanding_requests; i++) {
+        descriptors[i].rio_buf = {
+            .BufferId = buffer_id,
+            .Offset = static_cast<DWORD>(i * max_packet_length),  // offset is relative to start of buffer
+            .Length = max_packet_length,
+        };
+        descriptors[i].buffer = &buffer[i * max_packet_length];
     }
 
     // Enqueue descriptors
-    for (size_t i = 0; i < max_outstanding_receive; i++) {
+    for (size_t i = 0; i < max_outstanding_requests; i++) {
+        // RequestContext points to descriptor for reuse
         if (int result = rio_extension_function_table.RIOReceive(
-                request_queue,
-                &receive_descriptors[i],
-                1,
-                0,
-                &receive_descriptors[i] /* RequestContext for re-enqueue later*/);
+                request_queue, &descriptors[i].rio_buf, 1, 0, &descriptors[i]);
             result != TRUE) {
-            std::cout << "RIOReceive Error: " << WSAGetLastError() << std::endl;
+            std::cout << "RIOReceive Error (1): " << WSAGetLastError() << std::endl;
             return 1;
         }
     }
@@ -146,8 +151,8 @@ int main()
         // Dequeue results
         RIORESULT rio_results[16];
 
-        auto results_dequeued =
-            rio_extension_function_table.RIODequeueCompletion(completion_queue, rio_results, std::size(rio_results));
+        auto results_dequeued = rio_extension_function_table.RIODequeueCompletion(
+            completion_queue, rio_results, static_cast<DWORD>(std::size(rio_results)));
 
         if (0 == results_dequeued) {
             std::cout << "RIODequeueCompletion: No events dequeued!\n"
@@ -168,13 +173,13 @@ int main()
 
         // Reuse buffers
         for (size_t i = 0; i < results_dequeued; i++) {
-            // RequextContext was set to buffer in previous RIOReceive call
-            auto buffer = reinterpret_cast<RIO_BUF*>(rio_results[i].RequestContext);
+            // RequextContext was set to descriptor in previous RIOReceive call
+            auto descriptor = reinterpret_cast<Descriptor*>(rio_results[i].RequestContext);
 
-           if (auto result = rio_extension_function_table.RIOReceive(
-                request_queue, buffer, 1, 0, buffer /* RequestContext for re-enqueue next time*/);
+            if (auto result = rio_extension_function_table.RIOReceive(
+                    request_queue, &descriptor->rio_buf, 1, 0, descriptor);
                 result != TRUE) {
-                std::cout << "RIOReceive Error: " << WSAGetLastError() << std::endl;
+                std::cout << "RIOReceive Error (2): " << WSAGetLastError() << std::endl;
                 return 1;
             }
         }
