@@ -14,3 +14,23 @@ send_rio and recv_rio running
 ![image](https://github.com/philippdiethelm/rio_experimentation/assets/97515731/4560fa6e-fc0b-4967-a9a1-da8ee0be7d0f)
 ![image](https://github.com/philippdiethelm/rio_experimentation/assets/97515731/70207ee4-0607-4f59-8c7f-63fc42abbb9c)
 ![image](https://github.com/philippdiethelm/rio_experimentation/assets/97515731/75144465-21b5-4689-87ae-9483a3eb0564)
+
+## Tipps and Tricks
+
+### Common error numbers
+[Windows Sockets Error Codes](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2)
+
+| Code       | Value   | Description                                           |
+| ---------- | ------- | ----------------------------------------------------- |
+| WSAEINVAL  | 10022   | An invalid argument was supplied.                     |
+
+
+### Lookup error number from WSAGetLastError()
+There is a powerful windows on-board method available to look up windows error messages from numbers:
+`net helpmsg <number>`.
+
+Usage  
+```
+C:\> net helpmsg 10022
+An invalid argument was supplied.
+```
