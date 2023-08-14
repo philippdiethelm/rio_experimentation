@@ -177,11 +177,11 @@ int main()
         }
     }
     
-    size_t total_bytes_transferred = 0;
-    size_t total_packets_sent = 0;
+    size_t statistics_bytes_transferred = 0;
+    size_t statistics_packets_sent = 0;
     
     using wall_clock = std::chrono::steady_clock;
-    auto start_time = wall_clock::now();
+    auto statistics_time = wall_clock::now();
 
     // ready
     for (;;) {
@@ -198,8 +198,8 @@ int main()
         // Dequeue results
         RIORESULT rio_results[16];
 
-        auto results_dequeued =
-            rio_extension_function_table.RIODequeueCompletion(completion_queue, rio_results, std::size(rio_results));
+        auto results_dequeued = rio_extension_function_table.RIODequeueCompletion(
+            completion_queue, rio_results, static_cast<DWORD>(std::size(rio_results)));
 
         if (0 == results_dequeued) {
             std::cout << "RIODequeueCompletion: No events dequeued!\n"
@@ -215,18 +215,26 @@ int main()
         // Parse results for statistics
 #if 1
         for (size_t i = 0; i < results_dequeued; i++) {
-            total_bytes_transferred += rio_results[i].BytesTransferred;
-            total_packets_sent++;
+            statistics_bytes_transferred += rio_results[i].BytesTransferred;
+            statistics_packets_sent++;
         }
 
-        auto run_time = wall_clock::now() - start_time;
-        auto run_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(run_time);
+        auto now = wall_clock::now();
 
-        if (run_time_ms.count() % 1000 == 0) {
-            auto bit_rate = (8 * 1000.0 * total_bytes_transferred / run_time_ms.count());
-            auto packet_rate = (1000.0 * total_packets_sent / run_time_ms.count());
-            std::cout << "Sent " << total_bytes_transferred << " bytes in " << run_time_ms;
-            std::cout << "  => " << packet_rate << " pkt/s or " << bit_rate << "bit/s" << std::endl;
+        using namespace std::literals::chrono_literals;
+
+        if (now - statistics_time >= 1s) {
+            auto diff_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - statistics_time);
+            auto bit_rate = (8 * 1000.0 * statistics_bytes_transferred / diff_time_ms.count());
+            auto packet_rate = (1000.0 * statistics_packets_sent / diff_time_ms.count());
+            std::cout << "Sent " << statistics_bytes_transferred << " bytes (" << statistics_packets_sent
+                      << " packets) in " << diff_time_ms;
+            std::cout << "  => " << packet_rate << " pkt/s or " << bit_rate << " bit/s" << std::endl;
+
+            // next cycle
+            statistics_time = now;
+            statistics_bytes_transferred = 0;
+            statistics_packets_sent = 0;
         }
 #endif
 
