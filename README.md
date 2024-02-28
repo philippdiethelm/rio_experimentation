@@ -34,3 +34,8 @@ Usage
 C:\> net helpmsg 10022
 An invalid argument was supplied.
 ```
+
+## Links
+- [SAC-593T: New Techniques to Develop Low Latency Network Apps](https://video.ch9.ms/build/2011/slides/SAC-593T_Briggs.pptx)
+- [SAC-433T: Network acceleration and other NIC technologies for the data center](https://video.ch9.ms/build/2011/slides/SAC-433T_Stanwyck.pptx)
+
