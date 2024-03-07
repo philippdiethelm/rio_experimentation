@@ -23,7 +23,7 @@ send_rio and recv_rio running
 | Code       | Value   | Description                                           |
 | ---------- | ------- | ----------------------------------------------------- |
 | WSAEINVAL  | 10022   | An invalid argument was supplied.                     |
-
+| WSAENOBUFS | 10055   | No buffer space available.                            |
 
 ### Lookup error number from WSAGetLastError()
 There is a powerful windows on-board method available to look up windows error messages from numbers:

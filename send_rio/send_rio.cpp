@@ -24,15 +24,17 @@ struct Packet {
 
 int main()
 {
-    WSADATA wsaData {};
-
     // Initialize Winsock
+    // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsastartup
+    WSADATA wsaData {};
     if (int result = WSAStartup(MAKEWORD(2, 2), &wsaData); result != 0) {
         std::cout << "WSAStartup failed with error " << result << std::endl;
         return 1;
     }
 
     // UDP socket
+    // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasocketa
+    // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasocketw
     auto sockfd = WSASocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_REGISTERED_IO);
     if (sockfd == INVALID_SOCKET) {
         std::cout << "WSASocket failed with error " << WSAGetLastError() << std::endl;
@@ -40,6 +42,7 @@ int main()
     }
 
     // Setup UDP source port
+    // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-bind
     sockaddr_in bind_addr {
         .sin_family = AF_INET,
         .sin_port = htons(UDP_SRC_PORT),
@@ -51,20 +54,22 @@ int main()
     }
 
     // Get RIO functions from API
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/ns-mswsock-rio_extension_function_table
+    // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaioctl
     RIO_EXTENSION_FUNCTION_TABLE rio_extension_function_table {};
     GUID GUID_WSAID_MULTIPLE_RIO = WSAID_MULTIPLE_RIO;
     DWORD bytes_returned = 0;
 
     if (int result = WSAIoctl(
-            sockfd,
-            SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER,
-            &GUID_WSAID_MULTIPLE_RIO,
-            sizeof(GUID_WSAID_MULTIPLE_RIO),
-            (void**)&rio_extension_function_table,
-            sizeof(rio_extension_function_table),
-            &bytes_returned,
-            nullptr,
-            nullptr);
+            sockfd,                                       // [in]  SOCKET           s,
+            SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER,  // [in]  DWORD            dwIoControlCode,
+            &GUID_WSAID_MULTIPLE_RIO,                     // [in]  LPVOID           lpvInBuffer,
+            sizeof(GUID_WSAID_MULTIPLE_RIO),              // [in]  DWORD            cbInBuffer,
+            (void**)&rio_extension_function_table,        // [out] LPVOID           lpvOutBuffer,
+            sizeof(rio_extension_function_table),         // [in]  DWORD            cbOutBuffer,
+            &bytes_returned,                              // [out] LPDWORD          lpcbBytesReturned,
+            nullptr,                                      // [in]  LPWSAOVERLAPPED  lpOverlapped,
+            nullptr);  // [in]  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
         result != 0) {
         auto last_error = ::GetLastError();
         std::cout << "WSAIoctl Error: " << last_error << std::endl;
@@ -72,6 +77,7 @@ int main()
     }
 
     // Setup completion by Event
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/ns-mswsock-rio_notification_completion
     auto notification_event = WSACreateEvent();
     if (notification_event == WSA_INVALID_EVENT) {
         std::cout << "WSACreateEvent Error: " << WSAGetLastError() << std::endl;
@@ -88,18 +94,28 @@ int main()
     };
 
     // Setup completion queue
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_riocreatecompletionqueue
     constexpr DWORD max_outstanding_requests = 128;
 
-    auto completion_queue =
-        rio_extension_function_table.RIOCreateCompletionQueue(max_outstanding_requests, &completion_spec);
+    auto completion_queue = rio_extension_function_table.RIOCreateCompletionQueue(
+        max_outstanding_requests,  // DWORD                        QueueSize,
+        &completion_spec);         // PRIO_NOTIFICATION_COMPLETION NotificationCompletion
     if (completion_queue == RIO_INVALID_CQ) {
         std::cout << "RIOCreateCompletionQueue Error: " << WSAGetLastError() << std::endl;
         return 1;
     }
 
     // Setup request queue
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_riocreaterequestqueue
     auto request_queue = rio_extension_function_table.RIOCreateRequestQueue(
-        sockfd, 0, 1, max_outstanding_requests, 1, completion_queue, completion_queue, nullptr);
+        sockfd,                    // SOCKET   Socket,
+        0,                         // ULONG    MaxOutstandingReceive,
+        1,                         // ULONG    MaxReceiveDataBuffers,
+        max_outstanding_requests,  // ULONG    MaxOutstandingSend,
+        1,                         // ULONG    MaxSendDataBuffers,
+        completion_queue,          // RIO_CQ   ReceiveCQ,
+        completion_queue,          // RIO_CQ   SendCQ,
+        nullptr);                  // PVOID    SocketContext
     if (request_queue == RIO_INVALID_RQ) {
         std::cout << "RIOCreateRequestQueue Error: " << WSAGetLastError() << std::endl;
         return 1;
@@ -117,7 +133,10 @@ int main()
     }
 
     // Register buffer
-    auto buffer_id = rio_extension_function_table.RIORegisterBuffer(buffer, static_cast<DWORD>(buffer_size));
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_rioregisterbuffer
+    auto buffer_id = rio_extension_function_table.RIORegisterBuffer(
+        buffer,                            // PCHAR DataBuffer,
+        static_cast<DWORD>(buffer_size));  // DWORD DataLength
     if (buffer_id == RIO_INVALID_BUFFERID) {
         std::cout << "RIORegisterBuffer Error: " << WSAGetLastError() << std::endl;
         return 1;
@@ -147,7 +166,8 @@ int main()
     for (size_t i = 0; i < max_outstanding_requests; i++) {
         descriptors[i].rio_buf = {
             .BufferId = buffer_id,
-            .Offset = static_cast<DWORD>(remote_address_length + i * max_packet_length),  // offset relative to start of buffer
+            // offset relative to start of buffer
+            .Offset = static_cast<DWORD>(remote_address_length + i * max_packet_length),
             .Length = max_packet_length,
         };
 
@@ -160,32 +180,34 @@ int main()
     }
 
     // Enqueue descriptors
+    // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_riosendex
     for (size_t i = 0; i < max_outstanding_requests; i++) {
         if (int result = rio_extension_function_table.RIOSendEx(
-                request_queue,
-                &descriptors[i].rio_buf,
-                1,
-                nullptr,
-                &remote_address,
-                nullptr,
-                nullptr,
-                0,
-                &descriptors[i] /* RequestContext for re-enqueue later*/);
+                request_queue,            // RIO_RQ     SocketQueue,
+                &descriptors[i].rio_buf,  // PRIO_BUF   pData,
+                1,                        // ULONG      DataBufferCount,
+                nullptr,                  // PRIO_BUF   pLocalAddress,
+                &remote_address,          // PRIO_BUF   pRemoteAddress,
+                nullptr,                  // PRIO_BUF   pControlContext,
+                nullptr,                  // PRIO_BUF   pFlags,
+                0,                        // DWORD      Flags,
+                &descriptors[i]);         // PVOID      RequestContext
             result != TRUE) {
             std::cout << "RIOSendEx (1) Error: " << WSAGetLastError() << std::endl;
             return 1;
         }
     }
-    
+
     size_t statistics_bytes_transferred = 0;
     size_t statistics_packets_sent = 0;
-    
+
     using wall_clock = std::chrono::steady_clock;
     auto statistics_time = wall_clock::now();
 
     // ready
     for (;;) {
         // Signal that we are ready to receive
+        // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_rionotify
         rio_extension_function_table.RIONotify(completion_queue);
 
         // Wait for something to happen
@@ -196,10 +218,13 @@ int main()
         }
 
         // Dequeue results
+        // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_riodequeuecompletion
         RIORESULT rio_results[16];
 
         auto results_dequeued = rio_extension_function_table.RIODequeueCompletion(
-            completion_queue, rio_results, static_cast<DWORD>(std::size(rio_results)));
+            completion_queue,                             // RIO_CQ       CQ,
+            rio_results,                                  // PRIORESULT   Array,
+            static_cast<DWORD>(std::size(rio_results)));  // ULONG        ArraySize
 
         if (0 == results_dequeued) {
             std::cout << "RIODequeueCompletion: No events dequeued!\n"
@@ -240,30 +265,30 @@ int main()
 
         // Reuse buffers
         for (size_t i = 0; i < results_dequeued; i++) {
-            // RequextContext was set to buffer in previous RIOSendEx call
+            // RequextContext was set to the descriptor in previous RIOSendEx call
             auto descriptor = reinterpret_cast<Descriptor*>(rio_results[i].RequestContext);
 
             packet.number++;
             memcpy(descriptor->buffer, &packet, sizeof(packet));
             descriptor->rio_buf.Length = sizeof(packet);
 
+            // Enqueue
+            // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_riosendex
             if (int result = rio_extension_function_table.RIOSendEx(
-                    request_queue,
-                    &descriptor->rio_buf,
-                    1,
-                    nullptr,
-                    &remote_address,
-                    nullptr,
-                    nullptr,
-                    0,
-                    descriptor /* RequestContext for re-enqueue later*/);
+                    request_queue,         // RIO_RQ     SocketQueue,
+                    &descriptor->rio_buf,  // PRIO_BUF   pData,
+                    1,                     // ULONG      DataBufferCount,
+                    nullptr,               // PRIO_BUF   pLocalAddress,
+                    &remote_address,       // PRIO_BUF   pRemoteAddress,
+                    nullptr,               // PRIO_BUF   pControlContext,
+                    nullptr,               // PRIO_BUF   pFlags,
+                    0,                     // DWORD      Flags,
+                    descriptor);           // PVOID      RequestContext
                 result != TRUE) {
                 std::cout << "RIOSendEx (2) Error: " << WSAGetLastError() << std::endl;
                 return 1;
             }
         }
-
-
     }
 
     return 0;
